@@ -1,19 +1,203 @@
-name: ci
+name: CI
+
+# Single workflow file — this filename is the ONE trusted publisher
+# configured on npm (ci.yml). CI on PRs, publish on push to main (stable),
+# v*-beta* tag push (beta prerelease), or manual dispatch (staging beta).
+#
+# Stable version comes from the npm registry (last published `latest` +
+# patch), not from a possibly-stale package.json, so repeated merges never
+# collide. An intentional minor/major bump in package.json is honored: if the
+# working tree version is ahead of the registry, it is published as-is.
+#
+# npm trusted publishing (OIDC) auto-generates provenance — no token needed.
+#
+# Publish failures are retried 3x for transient issues only — a version
+# conflict (already published) is NEVER retried. Publish serialized via
+# concurrency; CI runs on the same ref are cancelled when superseded.
 
 on:
   push:
     branches: [main]
+    tags: ["v*-beta*"]
   pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
-  check:
+  test:
     runs-on: ubuntu-latest
+    concurrency:
+      group: ci-${{ github.ref }}
+      cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
-      - name: Syntax check
-        run: node --check index.js
-      - name: Markdownlint
-        run: npx -y markdownlint-cli2 "**/*.md"
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+
+  publish:
+    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    concurrency:
+      group: publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      id-token: write # trusted publishing (OIDC)
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org/
+      - run: npm ci
+        timeout-minutes: 2
+      - name: Determine channel (latest / beta)
+        id: channel
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "tag=beta" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # manual staging: next -beta.X after the last published beta
+            CUR=$(npm pkg get version | tr -d '"')
+            LAST_BETA=$(npm view opencode-rtk-plugin@beta version 2>/dev/null || true)
+            if [ -n "$LAST_BETA" ]; then
+              LAST_BASE="${LAST_BETA%-beta.*}"
+              NEXT_BASE=$(printf '%s\n' "$CUR" "$LAST_BASE" | sort -V | tail -1)
+              if [ "$NEXT_BASE" = "$LAST_BASE" ] && [ "$NEXT_BASE" != "$CUR" ]; then
+                N="${LAST_BETA##*-beta.}"
+                npm version "${NEXT_BASE}-beta.$((N + 1))" --no-git-tag-version --no-commit-hooks
+              else
+                npm version prerelease --preid=beta --no-git-tag-version --no-commit-hooks
+              fi
+            else
+              npm version prerelease --preid=beta --no-git-tag-version --no-commit-hooks
+            fi
+            echo "tag=beta" >> "$GITHUB_OUTPUT"
+          else
+            # merge to main -> next patch after the last published `latest`
+            LAST=$(npm view opencode-rtk-plugin@latest version 2>/dev/null || true)
+            CUR=$(npm pkg get version | tr -d '"')
+            if [ -n "$LAST" ] && [ "$(printf '%s\n%s' "$CUR" "$LAST" | sort -V | tail -1)" = "$LAST" ]; then
+              # tree at/below registry -> align to registry (unless equal),
+              # then bump patch; npm errors on "Version not changed" if the
+              # align target equals the current version
+              if [ "$CUR" != "$LAST" ]; then
+                npm version "$LAST" --no-git-tag-version --no-commit-hooks
+              fi
+              npm version patch --no-git-tag-version --no-commit-hooks
+            else
+              # tree version ahead (intentional minor/major bump) -> as-is
+              :
+            fi
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Show publishing target
+        run: 'echo "Publishing $(npm pkg get version) to tag ${{ steps.channel.outputs.tag }}"'
+      - name: Publish (retry transient only)
+        timeout-minutes: 5
+        run: |
+          for i in $(seq 1 3); do
+            OUT=$(npm publish --tag ${{ steps.channel.outputs.tag }} --provenance --access public 2>&1) && { echo "$OUT"; exit 0; }
+            if echo "$OUT" | grep -qE "cannot publish over|previously published"; then
+              echo "$OUT" >&2
+              echo "Version conflict — not retrying" >&2
+              exit 1
+            fi
+            echo "$OUT"
+            echo "Publish failed (transient?), retrying ($i/3)..."
+            sleep 3
+          done
+          exit 1
+      - name: Push tag (stable only)
+        id: tag
+        if: steps.channel.outputs.tag == 'latest'
+        run: |
+          V=$(npm pkg get version | tr -d '"')
+          echo "published=$V" >> "$GITHUB_OUTPUT"
+          git tag "v$V"
+          git push origin "v$V"
+      - uses: softprops/action-gh-release@v3
+        if: steps.channel.outputs.tag == 'latest'
+        with:
+          tag_name: v${{ steps.tag.outputs.published }}
+          generate_release_notes: true
+      - uses: softprops/action-gh-release@v3
+        if: github.ref_type == 'tag'
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          prerelease: true
+
+  # Per-PR beta prerelease: every PR push publishes a unique
+  # <version>-beta.<run_number> to the npm `beta` dist-tag, so every PR is
+  # instantly installable (`npm i opencode-rtk-plugin@beta`). run_number
+  # increases per workflow run, so each push gets a unique version; re-runs
+  # collide with themselves and are deduped (conflict = exit 0). Same-repo,
+  # non-draft, non-dependabot PRs only.
+  prerelease:
+    runs-on: ubuntu-latest
+    needs: test
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]'
+    concurrency:
+      group: pr-prerelease-${{ github.ref }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      id-token: write # trusted publishing (OIDC)
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org/
+      - run: npm ci
+      - name: Compute prerelease version
+        id: version
+        run: |
+          BASE=$(npm pkg get version | tr -d '"')
+          echo "version=${BASE}-beta.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+      - name: Set version (no git change)
+        run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version --no-commit-hooks
+      - name: Publish beta prerelease
+        timeout-minutes: 5
+        run: |
+          for i in $(seq 1 3); do
+            OUT=$(npm publish --tag beta --provenance --access public 2>&1) && { echo "$OUT"; exit 0; }
+            if echo "$OUT" | grep -qE "cannot publish over|previously published"; then
+              echo "$OUT" >&2
+              echo "Version conflict (workflow re-run) — deduped" >&2
+              exit 0
+            fi
+            echo "$OUT"
+            echo "Publish failed (transient?), retrying ($i/3)..."
+            sleep 3
+          done
+          exit 1
+      - name: Comment version on PR
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const body = `Beta prerelease published: \`${{ steps.version.outputs.version }}\` — installable with \`npm i opencode-rtk-plugin@beta\`.`;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number
+            });
+            const marker = comments.find(c => c.user.login === 'github-actions[bot]' && c.body.startsWith('Beta prerelease published:'));
+            if (marker) {
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: marker.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+            }

@@ -1,5 +1,5 @@
 {
-  "name": "opencode-rtk",
+  "name": "opencode-rtk-plugin",
   "version": "1.0.0",
   "description": "OpenCode v2 plugin that rewrites shell commands through rtk to cut LLM token usage by 60-90%.",
   "type": "module",
@@ -28,13 +28,24 @@
   "author": "Nabheet S. Sandhu",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nabheet/opencode-rtk.git"
+    "url": "git+https://github.com/nabheet/opencode-rtk-plugin.git"
   },
   "bugs": {
-    "url": "https://github.com/nabheet/opencode-rtk/issues"
+    "url": "https://github.com/nabheet/opencode-rtk-plugin/issues"
   },
-  "homepage": "https://github.com/nabheet/opencode-rtk#readme",
+  "homepage": "https://github.com/nabheet/opencode-rtk-plugin#readme",
   "engines": {
     "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "lint": "markdownlint-cli2 \"**/*.md\"",
+    "test": "node --check index.js && node -e \"import('./index.js').then(m => { if (!m.default?.id || typeof m.default.setup !== 'function') { console.error('invalid plugin export'); process.exit(1) } console.log('plugin id:', m.default.id) })\"",
+    "check": "npm run lint && npm test"
+  },
+  "devDependencies": {
+    "markdownlint-cli2": "^0.23.0"
   }
 }
