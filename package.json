@@ -1,0 +1,40 @@
+{
+  "name": "opencode-rtk",
+  "version": "1.0.0",
+  "description": "OpenCode v2 plugin that rewrites shell commands through rtk to cut LLM token usage by 60-90%.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "opencode-v2",
+    "rtk",
+    "token-optimization",
+    "token-savings",
+    "llm",
+    "ai-coding-agent",
+    "context-window",
+    "shell"
+  ],
+  "license": "MIT",
+  "author": "Nabheet S. Sandhu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nabheet/opencode-rtk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nabheet/opencode-rtk/issues"
+  },
+  "homepage": "https://github.com/nabheet/opencode-rtk#readme",
+  "engines": {
+    "node": ">=18"
+  }
+}
