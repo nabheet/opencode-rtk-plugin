@@ -1,6 +1,6 @@
 {
   "name": "opencode-rtk-plugin",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "OpenCode v2 plugin that rewrites shell commands through rtk to cut LLM token usage by 60-90%.",
   "type": "module",
   "main": "index.js",
