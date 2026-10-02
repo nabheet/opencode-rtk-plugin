@@ -42,7 +42,7 @@
   },
   "scripts": {
     "lint": "markdownlint-cli2 \"**/*.md\"",
-    "test": "node --check index.js && node -e \"import('./index.js').then(m => { if (!m.default?.id || typeof m.default.setup !== 'function') { console.error('invalid plugin export'); process.exit(1) } console.log('plugin id:', m.default.id) })\"",
+    "test": "node --check index.js && node --test test/*.test.mjs",
     "check": "npm run lint && npm test"
   },
   "devDependencies": {
