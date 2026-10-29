@@ -21,6 +21,7 @@ on:
     tags: ["v*-beta*"]
   pull_request:
     branches: [main]
+  merge_group:
   workflow_dispatch:
 
 jobs:
@@ -40,7 +41,7 @@ jobs:
       - run: npm test
 
   publish:
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     needs: test
     runs-on: ubuntu-latest
     concurrency:
