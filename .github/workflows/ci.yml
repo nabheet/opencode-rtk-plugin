@@ -226,7 +226,7 @@ jobs:
           node-version: 24
           cache: npm
           registry-url: https://registry.npmjs.org/
-      - run: npm ci
+      - run: npm ci --ignore-scripts
         if: steps.changes.outputs.changed == 'true'
         timeout-minutes: 2
       - name: Determine channel (latest / beta)
@@ -394,7 +394,7 @@ jobs:
           node-version: 24
           cache: npm
           registry-url: https://registry.npmjs.org/
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - name: Compute prerelease version
         id: version
         run: |
