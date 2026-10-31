@@ -28,6 +28,13 @@ on:
   merge_group:
   workflow_dispatch:
 
+# Read-only GITHUB_TOKEN for every job that does not say otherwise (publish
+# and prerelease declare their own blocks, which replace this one). Keeps a
+# future job from silently inheriting write access, and satisfies CodeQL
+# actions/missing-workflow-permissions.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
