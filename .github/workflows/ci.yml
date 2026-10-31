@@ -17,12 +17,12 @@ name: CI
 # every path changed since the last release (newest stable v* tag) is
 # non-shipping.
 #   * NON-shipping (never cuts a release): package-lock.json, .github/**, and
-#     package.json when its only diffs are the INERT devDependencies (the
-#     allowlist in the step below), or an overrides block while the package has
-#     no runtime dependency for it to affect.
+#     package.json when its only diffs are `version` and/or the INERT
+#     devDependencies (the allowlist in the step below), or an overrides block
+#     while the package has no runtime dependency for it to affect.
 #   * Everything else ships: index.js, README/other published files, and
-#     package.json when version, a shipping field, a non-inert devDependency or
-#     a runtime-affecting overrides block changes.
+#     package.json when a shipping field, a non-inert devDependency or a
+#     runtime-affecting overrides block changes (a lone `version` bump does not).
 #
 # Publish failures are retried up to 5x. A version conflict is not retried
 # as-is: on `latest` CI bumps a patch and republishes (bounded at two bumps);
@@ -160,13 +160,14 @@ jobs:
           echo "Paths changed by ${BASE}..${SHA}:"
           git diff --no-renames --name-only -z "$BASE" "$SHA" | tr '\0' '\n'
 
-          # package.json is non-shipping only when every difference is an INERT
-          # devDependency (the explicit list below — lint only, never in the
-          # published package). Everything else ships:
-          #   * `version` — a deliberate bump means "publish this version", and
-          #     the channel step honours it when it is ahead of the derived
-          #     baseline. Nothing bumps it automatically in this repo, so it
-          #     cannot cause version churn on its own.
+          # package.json is non-shipping only when every difference is `version`
+          # or an INERT devDependency (the explicit list below — lint only,
+          # never in the published package). Everything else ships:
+          #   * `version` is derived (newest stable tag vs registry, then a
+          #     patch bump), so a lone bump releases nothing; land it with the
+          #     change it is meant to release. When a release does run and the
+          #     tree version is ahead of both baselines, the channel step
+          #     publishes it as-is.
           #   * `overrides` — shipping when a runtime dependency exists, because
           #     it changes what consumers install; non-shipping when
           #     `dependencies`, `optionalDependencies`, `peerDependencies` and
@@ -182,9 +183,10 @@ jobs:
             # Single quotes are deliberate: $inert/$k are jq variables, not
             # shell ones.
             # shellcheck disable=SC2016
-            local normalise='if has("devDependencies")
-              then .devDependencies |= with_entries(select(.key as $k | ($inert | index($k)) | not))
-              else . end
+            local normalise='del(.version)
+              | if has("devDependencies")
+                then .devDependencies |= with_entries(select(.key as $k | ($inert | index($k)) | not))
+                else . end
               | if (.devDependencies // {}) == {} then del(.devDependencies) else . end
               | if ((.dependencies // {}) == {} and (.optionalDependencies // {}) == {} and (.peerDependencies // {}) == {} and (.bundledDependencies // []) == [])
                 then del(.overrides)
