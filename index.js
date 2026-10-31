@@ -44,7 +44,7 @@ function rewriteCommand(binary, command, timeoutMs) {
         (_err, stdout) => {
           const out = String(stdout ?? "").trim();
           done(out && out !== command ? out : null);
-        }
+        },
       );
     } catch {
       return done(null);
