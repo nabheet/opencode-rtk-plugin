@@ -177,7 +177,7 @@ jobs:
           #     bundler or compiler), which still cuts a release when bumped.
           # jq -S normalises key order; on any error (e.g. package.json absent
           # on one side) treat it as shipping.
-          INERT_DEVDEPS='["markdownlint-cli2"]'
+          INERT_DEVDEPS='["@biomejs/biome","markdownlint-cli2"]'
           pkg_shipping_changed() {
             local before after
             # Single quotes are deliberate: $inert/$k are jq variables, not

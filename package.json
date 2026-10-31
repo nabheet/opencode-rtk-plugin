@@ -41,11 +41,13 @@
     "access": "public"
   },
   "scripts": {
-    "lint": "markdownlint-cli2 \"**/*.md\"",
+    "lint": "biome check . && markdownlint-cli2 \"**/*.md\" \"#node_modules/**\" \"#dist/**\" \"#.git/**\"",
+    "lint:fix": "biome check --write . && markdownlint-cli2 --fix \"**/*.md\" \"#node_modules/**\" \"#dist/**\" \"#.git/**\"",
     "test": "node --check index.js && node --test test/*.test.mjs",
     "check": "npm run lint && npm test"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.6.4",
     "markdownlint-cli2": "^0.24.0"
   },
   "overrides": {

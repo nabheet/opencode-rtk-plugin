@@ -21,6 +21,8 @@ form before the model ever sees it. This plugin wires the two together.
 - OpenCode **v2** (`opencode --version` reports 2.x).
 - `rtk` >= 0.23.0 on `PATH` — see [rtk-ai/rtk](https://github.com/rtk-ai/rtk):
   `brew install rtk`
+- Node >= 22 to run the dev tooling (`markdownlint-cli2` needs it); `.nvmrc`
+  pins 24, matching CI. The plugin itself runs on Node 18+.
 
 ## Install
 
@@ -86,7 +88,7 @@ The plugin registers one OpenCode v2 shell hook:
 ```js
 ctx.shell.hook("create.before", (event) => {
   // event.command is the command about to run; mutate it to rewrite
-})
+});
 ```
 
 For each shell command it runs `rtk rewrite <command>` and replaces the command

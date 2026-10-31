@@ -4,11 +4,11 @@
 // without rtk installed. The critical regression: `rtk rewrite` exits 3 with
 // the rewrite on stdout — the plugin must key on stdout, not exit status.
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, chmod } from "node:fs/promises";
+import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { test } from "node:test";
 
 import plugin from "../index.js";
 
