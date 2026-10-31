@@ -118,9 +118,11 @@ publisher per package; the workflow filename must stay `ci.yml`):
 
 - `test` — lint + plugin-export smoke check on `main` and PRs (Node 24).
 - push to `main` → `publish` job publishes the next patch to `latest`, pushes a
-  `vX.Y.Z` tag, and opens a GitHub release. The version is derived from the
-  last published `latest`, so repeated merges never collide; an intentional
-  minor/major bump in `package.json` is honored.
+  `vX.Y.Z` tag, and opens a GitHub release. The version is the highest of the
+  newest stable `vX.Y.Z` tag and the registry's `latest`, plus a patch, so
+  repeated merges never collide; an intentional minor/major bump in
+  `package.json` is honored. A publish that hits `E409` bumps a patch and
+  retries (bounded), because the registry read can lag a fresh publish.
 - tag `v*-beta*` → `publish` job publishes `beta` + a prerelease GitHub release.
 - every PR push → `prerelease` job publishes `<version>-beta.<run_number>` to
   `beta` (same-repo, non-draft, non-dependabot PRs; re-runs deduped).
