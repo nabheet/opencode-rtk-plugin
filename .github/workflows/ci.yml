@@ -13,6 +13,17 @@ name: CI
 #
 # npm trusted publishing (OIDC) auto-generates provenance — no token needed.
 #
+# RELEASE RULE (enforced by the "changes" step in `publish`): publish UNLESS
+# every path changed since the last release (newest stable v* tag) is
+# non-shipping.
+#   * NON-shipping (never cuts a release): package-lock.json, .github/**, and
+#     package.json when its only diffs are `version` and/or the INERT
+#     devDependencies (the allowlist in the step below), or an overrides block
+#     while the package has no runtime dependency for it to affect.
+#   * Everything else ships: index.js, README/other published files, and
+#     package.json when a shipping field, a non-inert devDependency or a
+#     runtime-affecting overrides block changes (a lone `version` bump does not).
+#
 # Publish failures are retried up to 5x. A version conflict is not retried
 # as-is: on `latest` CI bumps a patch and republishes (bounded at two bumps);
 # on the beta channels it fails fast, because those versions are already
@@ -39,7 +50,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
     concurrency:
-      group: ci-${{ github.ref }}
+      # Cancels superseded PR runs only. Never cancel a push to main:
+      # cancellation kills the whole run, including its `publish` job, and the
+      # follow-up non-shipping push would then skip — losing the release.
+      # github.head_ref is set only on pull_request events, so main pushes and
+      # tag pushes fall back to the unique run id and never cancel each other.
+      group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v7
@@ -69,15 +85,153 @@ jobs:
           # publish job needs every tag, not just the ones on this shallow
           # commit.
           fetch-depth: 0
+
+      # Implements the RELEASE RULE documented at the top of this file. Writes
+      # changed=true|false to $GITHUB_OUTPUT; every later step is gated on it,
+      # so a non-shipping push (a devDependency bump, package-lock churn, a
+      # .github-only edit) produces no build, no publish, no tag and no
+      # Release.
+      #
+      # The baseline is the last RELEASE (newest stable v* tag), not this
+      # push's `before`. A per-push baseline loses a release when a shipping
+      # push's publish fails: the next non-shipping push diffs only itself and
+      # skips, and the unshipped change waits for the next shipping push.
+      # Diffing from the last released commit means any unreleased shipping
+      # change is re-detected on every later run, so the publish retries.
+      - name: Determine whether there are unreleased shipping changes
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          emit() { # $1 = true|false (written to the step output), $2 = log line
+            echo "changed=$1" >> "$GITHUB_OUTPUT"
+            echo "$2"
+          }
+
+          # A beta tag push (v*-beta*) is an explicit release request.
+          if [ "$REF_TYPE" = "tag" ]; then
+            emit true "tag push: publishing"
+            exit 0
+          fi
+
+          # Manual dispatch = staging beta: a human asked for it.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            emit true "workflow_dispatch: publishing"
+            exit 0
+          fi
+
+          # Only plain `vX.Y.Z` tags count as release baselines. `git describe` is
+          # not used: it matches any `v*` tag (`v1.1.0-rc.1`, `v2`, `vdocs`), and
+          # the nearest such tag would hide every shipping commit after the last
+          # real release. `sort -V` is not semver-aware either, so the pattern
+          # filters rather than trusting the order. Reachability matters: a tag
+          # on a branch that never landed on main is not a release of this
+          # history.
+          BASE="$(git tag --merged "$SHA" --list 'v*' |
+            grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)"
+          if [ -n "$BASE" ]; then
+            echo "Baseline: last stable release tag ${BASE}"
+          else
+            # No stable release tag yet: a first release. Publish rather than
+            # skip — skipping would never create the tag the next run needs as
+            # its baseline.
+            emit true "no stable release tag yet: publishing (first release)"
+            exit 0
+          fi
+
+          # Shallow-checkout trap. If the baseline commit is not present, fail
+          # loudly instead of skipping (or falsely publishing) a release.
+          if ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "::error::baseline commit ${BASE} is not in this checkout; actions/checkout needs fetch-depth: 0 with tags"
+            exit 1
+          fi
+
+          # Squash merges make tag..sha exactly the unreleased diff.
+          # --no-renames: with rename detection on, `--name-only` reports only
+          # the NEW path of a rename, so a rename INTO a non-shipping path would
+          # hide the shipping source (e.g. `git mv index.js .github/index.js`).
+          # -z: NUL-delimited output, so a path containing a newline or a
+          # backslash cannot be split into two fake entries.
+          echo "Paths changed by ${BASE}..${SHA}:"
+          git diff --no-renames --name-only -z "$BASE" "$SHA" | tr '\0' '\n'
+
+          # package.json is non-shipping only when every difference is `version`
+          # or an INERT devDependency (the explicit list below — lint only,
+          # never in the published package). Everything else ships:
+          #   * `version` is derived (newest stable tag vs registry, then a
+          #     patch bump), so a lone bump releases nothing; land it with the
+          #     change it is meant to release. When a release does run and the
+          #     tree version is ahead of both baselines, the channel step
+          #     publishes it as-is.
+          #   * `overrides` — shipping when a runtime dependency exists, because
+          #     it changes what consumers install; non-shipping when
+          #     `dependencies`, `optionalDependencies`, `peerDependencies` and
+          #     `bundledDependencies` are all empty, because then it can only
+          #     affect the dev tree.
+          #   * any other field, including a non-inert devDependency (a future
+          #     bundler or compiler), which still cuts a release when bumped.
+          # jq -S normalises key order; on any error (e.g. package.json absent
+          # on one side) treat it as shipping.
+          INERT_DEVDEPS='["markdownlint-cli2"]'
+          pkg_shipping_changed() {
+            local before after
+            # Single quotes are deliberate: $inert/$k are jq variables, not
+            # shell ones.
+            # shellcheck disable=SC2016
+            local normalise='del(.version)
+              | if has("devDependencies")
+                then .devDependencies |= with_entries(select(.key as $k | ($inert | index($k)) | not))
+                else . end
+              | if (.devDependencies // {}) == {} then del(.devDependencies) else . end
+              | if ((.dependencies // {}) == {} and (.optionalDependencies // {}) == {} and (.peerDependencies // {}) == {} and (.bundledDependencies // []) == [])
+                then del(.overrides)
+                else . end'
+            before="$(git show "${BASE}:package.json" 2>/dev/null | jq -S --argjson inert "$INERT_DEVDEPS" "$normalise")" || return 0
+            after="$(git show "${SHA}:package.json" 2>/dev/null | jq -S --argjson inert "$INERT_DEVDEPS" "$normalise")" || return 0
+            [ "$before" != "$after" ]
+          }
+
+          publish=false
+          while IFS= read -r -d '' path; do
+            [ -z "$path" ] && continue
+            case "$path" in
+              package-lock.json|.github/*)
+                echo "  skip:    $path (non-shipping)"
+                ;;
+              package.json)
+                if pkg_shipping_changed; then
+                  echo "  PUBLISH: $path (a shipping field changed)"
+                  publish=true
+                else
+                  echo "  skip:    $path (only inert devDependencies changed)"
+                fi
+                ;;
+              *)
+                echo "  PUBLISH: $path"
+                publish=true
+                ;;
+            esac
+          done < <(git diff --no-renames --name-only -z "$BASE" "$SHA")
+
+          emit "$publish" "RESULT: changed=$publish"
+
       - uses: actions/setup-node@v7
+        if: steps.changes.outputs.changed == 'true'
         with:
           node-version: 24
           cache: npm
           registry-url: https://registry.npmjs.org/
       - run: npm ci
+        if: steps.changes.outputs.changed == 'true'
         timeout-minutes: 2
       - name: Determine channel (latest / beta)
         id: channel
+        if: steps.changes.outputs.changed == 'true'
         run: |
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
             echo "tag=beta" >> "$GITHUB_OUTPUT"
@@ -149,8 +303,10 @@ jobs:
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
       - name: Show derived publishing target
+        if: steps.changes.outputs.changed == 'true'
         run: 'echo "Derived target: $(npm pkg get version) to tag ${{ steps.channel.outputs.tag }} (a version conflict bumps the patch and republishes)"'
       - name: Publish (bump on version conflict, retry transient)
+        if: steps.changes.outputs.changed == 'true'
         timeout-minutes: 5
         run: |
           # A version conflict cannot be retried as-is: npm keeps rejecting the
@@ -192,19 +348,19 @@ jobs:
           exit 1
       - name: Push tag (stable only)
         id: tag
-        if: steps.channel.outputs.tag == 'latest'
+        if: steps.changes.outputs.changed == 'true' && steps.channel.outputs.tag == 'latest'
         run: |
           V=$(npm pkg get version | tr -d '"')
           echo "published=$V" >> "$GITHUB_OUTPUT"
           git tag "v$V"
           git push origin "v$V"
       - uses: softprops/action-gh-release@v3
-        if: steps.channel.outputs.tag == 'latest'
+        if: steps.changes.outputs.changed == 'true' && steps.channel.outputs.tag == 'latest'
         with:
           tag_name: v${{ steps.tag.outputs.published }}
           generate_release_notes: true
       - uses: softprops/action-gh-release@v3
-        if: github.ref_type == 'tag'
+        if: steps.changes.outputs.changed == 'true' && github.ref_type == 'tag'
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
