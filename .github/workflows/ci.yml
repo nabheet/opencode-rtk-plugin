@@ -178,6 +178,18 @@ jobs:
           # jq -S normalises key order; on any error (e.g. package.json absent
           # on one side) treat it as shipping.
           INERT_DEVDEPS='["@biomejs/biome","markdownlint-cli2"]'
+
+          # The literal above is the list this commit publishes under. The guard
+          # compares against the copy on the base revision instead, so a PR that
+          # adds a dependency to the list cannot skip that dependency's own
+          # release — the entry has to land through review first. No literal on
+          # the base (guard newly added) means everything ships, the
+          # fail-closed direction.
+          INERT_DEVDEPS="$(git show "${BASE}:.github/workflows/ci.yml" 2>/dev/null \
+            | sed -n "s/^[[:space:]]*INERT_DEVDEPS='\(.*\)'[[:space:]]*$/\1/p" \
+            | head -n1 || true)"
+          [ -n "$INERT_DEVDEPS" ] || INERT_DEVDEPS='[]'
+
           pkg_shipping_changed() {
             local before after
             # Single quotes are deliberate: $inert/$k are jq variables, not
