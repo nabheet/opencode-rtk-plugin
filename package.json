@@ -47,7 +47,7 @@
     "check": "npm run lint && npm test"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.6.4",
+    "@biomejs/biome": "^2.6.6",
     "markdownlint-cli2": "^0.24.0"
   },
   "overrides": {
